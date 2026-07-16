@@ -24,10 +24,6 @@ class AddModal(ui.Modal):
                 placeholder = "team"
                 default_name = None
                 default_altname = None
-            case "neither":
-                placeholder = "event"
-                default_name = self.parent_view.event_name
-                default_altname = self.parent_view.event_name
             case _:
                 raise ValueError(f"Unexpected div_team value of {self.parent_view.div_team}.")
         super().__init__(title=f"Provide new {placeholder} information", custom_id=str(self.parent_view.custom_id))
@@ -99,13 +95,6 @@ class AddModal(ui.Modal):
                 t.emote = self.emote_input.value
                 t.capacity = self.capacity_input.value
                 self.parent_view.teams.append(t)
-            case "neither":
-                d = Division()
-                d.name = self.name_input.value
-                d.alt_name = self.altname_input.value
-                d.emote = self.emote_input.value
-                d.capacity = self.capacity_input.value
-                self.parent_view.divisions.append(d)
             case _: 
                 raise ValueError(f"Unexpected div_team value of {self.parent_view.div_team}.")
 
@@ -217,7 +206,7 @@ class EditNeitherModal(ui.Modal):
                 default_capacity = self.parent_view.divisions[0].capacity
             case _:
                 raise ValueError(f"Unexpected div_team value of {self.parent_view.div_team}.")
-        super().__init__(title=f"Provide event information", custom_id=str(self.parent_view.custom_id))
+        super().__init__(title=f"Edit Event Detailss", custom_id=str(self.parent_view.custom_id))
         self.parent_view.custom_id += self.parent_view.custom_id
 
         name = ui.TextDisplay(f"Event Name\n    {default_name}\n\n")
@@ -251,7 +240,8 @@ class EditNeitherModal(ui.Modal):
         # self.parent_view.completed()
         await interaction.response.edit_message(view=self.parent_view)
 
-
+# Note: Must update to account for dropdown outside of modal.
+#   Probably just a "confirm remove" button
 class RemoveModal(ui.Modal):
     def __init__(self, parent_view):
         self.parent_view = parent_view
@@ -344,8 +334,11 @@ class StepThreeView(ui.LayoutView):
         self.edit_option: int | None = None
         self.custom_id: int = 0
 
+        # Import input event information
+            # Not yet implemented
+
         # User choices
-        self.div_team: Literal["divisions", "teams", "neither"] | None = None
+        self.div_team: Literal["divisions", "teams", "neither"] = "neither"
         self.divisions: list[Division] = []
         self.teams: list[Team] = []
         self.neither: list[Division] = []
@@ -354,6 +347,11 @@ class StepThreeView(ui.LayoutView):
         self.neither.append(Division())
         self.neither[0].name = event_name
         self.neither[0].alt_name = event_name
+
+        # Assign division info to neither if division a silent division
+        if (len(self.divisions) == 1) and (self.event_name == self.division[0].name):
+            self.neither = self.divisions
+            self.divisions = None 
 
         # Set layout components
         # Top container
@@ -378,32 +376,49 @@ class StepThreeView(ui.LayoutView):
         div_team_row.add_item(div_team_select)
 
         self.button_add = self.add_button(self)
+        self.button_editdivteam = self.edit_div_team_button(self)
         self.button_remove = self.remove_button(self)
         button_row = ui.ActionRow()
         button_row.add_item(self.button_add)
+        button_row.add_item(self.button_editdivteam)
         button_row.add_item(self.button_remove)
 
-        container_bottom = ui.Container()
-        container_bottom.add_item(
+        self.edit_remove_select = self.edit_remove_selection(self)
+        edit_remove_row = ui.ActionRow()
+        edit_remove_row.add_item(edit_remove_row)
+
+        container_middle = ui.Container()
+        container_middle.add_item(
             ui.TextDisplay(
                 content="Is this a team event, an event with multiple divisions, or neither?"
                 ))
-        container_bottom.add_item(div_team_row)
-        container_bottom.add_item(button_row)
+        container_middle.add_item(div_team_row)
+        container_middle.add_item(button_row)
+        container_middle.add_item(edit_remove_row)
 
-        # Dynamic container
-        self.edit_remove_select = self.edit_remove_selection(self)
-        self.button_editdivteam = self.edit_div_team_button(self)
-        self.button_editneither = self.edit_neither_button(self)
-        self.dynamic_selectrow = ui.ActionRow()
-        self.dynamic_buttonrow = ui.ActionRow()
-        self.dynamic_container = ui.Container()
+        # Set labels and active/inactive of middle (action) container
         self.div_team_container()
+
+        # Team/Div text container
+        dynamic_container = ui.Container()
+        self.dynamic_text = self.div_team_listing()
+        dynamic_container.add_item(self.dynamic_text)
+
+        # Next Step Container
+        self.next_button = self.next_step_button(self)
+        next_button_section = ui.Section(
+                    ui.TextDisplay(content="When you have made your selections..."),
+                    accessory=self.next_button,
+                    id=304
+                )
+        container_bottom = ui.Container()
+        container_bottom.add_item(container_bottom)
 
         # Add containers to LayoutView
         self.add_item(container_top)
-        self.add_item(container_bottom)
+        self.add_item(container_middle)
         self.add_item(self.dynamic_container)
+        self.add_item(container_bottom)
         container_top.accent_color = discord.Colour.dark_purple()
         container_bottom.accent_color = discord.Colour.dark_red()
         self.dynamic_container.accent_color = discord.Colour.dark_red()
@@ -518,22 +533,28 @@ class StepThreeView(ui.LayoutView):
         async def callback(self, interaction: discord.Interaction):
             # open modal
             # await interaction.response.edit_message(view=self.parent_view)
-            await interaction.response.send_modal(EditDivTeamModal(self.parent_view))
+            
+            # Send to different modal depending on if "neither" is selected.
+            match self.div_team:
+                case "neither":
+                    await interaction.response.send_modal(EditNeitherModal(self.parent_view))
+                case _:
+                    await interaction.response.send_modal(EditDivTeamModal(self.parent_view))
 
     
-    class edit_neither_button(ui.Button):
-        def __init__(self, parent_view: ui.LayoutView):
-              self.parent_view = parent_view
-              super().__init__(label="Edit Capacity", 
-                               style=discord.ButtonStyle.danger,
-                               disabled=True,
-                               custom_id=str(self.parent_view.custom_id))
-              self.parent_view.custom_id += self.parent_view.custom_id
+    # class edit_neither_button(ui.Button):
+    #     def __init__(self, parent_view: ui.LayoutView):
+    #           self.parent_view = parent_view
+    #           super().__init__(label="Edit Capacity", 
+    #                            style=discord.ButtonStyle.danger,
+    #                            disabled=True,
+    #                            custom_id=str(self.parent_view.custom_id))
+    #           self.parent_view.custom_id += self.parent_view.custom_id
 
-        async def callback(self, interaction: discord.Interaction):
-            # open modal
-            # await interaction.response.edit_message(view=self.parent_view)
-            await interaction.response.send_modal(EditNeitherModal(self.parent_view))
+    #     async def callback(self, interaction: discord.Interaction):
+    #         # open modal
+    #         # await interaction.response.edit_message(view=self.parent_view)
+    #         await interaction.response.send_modal(EditNeitherModal(self.parent_view))
 
 
     class remove_button(ui.Button):
@@ -568,6 +589,12 @@ class StepThreeView(ui.LayoutView):
             #     end_time: {self.parent_view.end_time}"""
 
             # await interaction.response.send_message(content=output)
+
+            # If "neither", create a division with the name and alt name of 
+            #   the event.
+            if div_team == "neither":
+                self.parent_view.divisions = self.parent_view.neither
+
             self.parent_view.stop() # This finally releases the view.wait() in calling method
 
 
@@ -602,10 +629,17 @@ class StepThreeView(ui.LayoutView):
             team and division in information. The following actions must 
             be taken:
                 - If there is NO division/team, 
-                    add edit and remove buttons and make them inactive
+                    make edit and remove buttons inactive
+                    change labels of add/edit/remove buttons to reflect team/division
+                    make div/team dropdown inactive
                 - If there is a division/team, 
-                    add edit and remove buttons and make them active
+                    make edit and remove buttons active
+                    change labels of add/edit/remove buttons to reflect team/division
+                    make div/team dropdown active
                 - If 'neither' selected,
+                    make add and remove buttons inactive
+                    change label of edit button to "edit details"
+                    make div/team dropdown inactive
 
         """
         # Manage labels and active status
@@ -613,29 +647,42 @@ class StepThreeView(ui.LayoutView):
             case "divisions":
                 self.button_add.disabled = False
                 self.button_add.label = "Add Division"
+                self.button_editdivteam.label = "Edit Division"
                 self.button_remove.label = "Remove Divison"
                 self.edit_remove_select.disabled = False
-                self.button_editneither.disabled = True
                 if self.divisions:
-                    self.button_editdivteam.label = "Edit Division"
                     self.button_editdivteam.disabled = False
-                    # self.button_remove.disabled = False
+                    self.button_remove.disabled = False
+                    self.next_button.disabled = False
                 else:
                     self.button_editdivteam.disabled = True
-                    # self.button_remove.disabled = True
+                    self.button_remove.disabled = True
+                    self.next_button.disabled = True
             case "teams":
                 self.button_add.disabled = False
                 self.button_add.label = "Add Team"
+                self.button_editdivteam.label = "Edit Team"
                 self.button_remove.label = "Remove Team"
                 self.edit_remove_select.disabled = False
                 if self.teams:
-                    self.button_editdivteam.label = "Edit Team"
                     self.button_editdivteam.disabled = False
-                    # self.button_remove.disabled = False
+                    self.button_remove.disabled = False
+                    self.next_button.disabled = False
                 else:
                     self.button_editdivteam.disabled = True
-                    # self.button_remove.disabled = True
+                    self.button_remove.disabled = True
+                    self.next_button.disabled = True
             case "neither":
+                # Create one division with event_name
+                self.button_add.disabled = True
+                self.button_remove.disabled = True
+                self.button_add.label = "-----"
+                self.button_remove.label = "-----"
+                self.button_editdivteam.label = "Edit Details"
+                self.edit_remove_select.disabled = True
+                self.button_editdivteam.disabled = False
+                self.next_button.disabled = False
+            case None: # Note: default now neither. this shouldnt occur.
                 # Create one division with event_name
                 self.button_add.disabled = True
                 self.button_remove.disabled = True
@@ -643,38 +690,28 @@ class StepThreeView(ui.LayoutView):
                 self.button_remove.label = "-----"
                 self.edit_remove_select.disabled = True
                 self.button_editdivteam.disabled = True
-                self.button_editneither.disabled = False
-            case None:
-                # Create one division with event_name
-                self.button_add.disabled = True
-                self.button_remove.disabled = True
-                self.button_add.label = "-----"
-                self.button_remove.label = "-----"
-                self.edit_remove_select.disabled = True
-                self.button_editdivteam.disabled = True
-                self.button_editneither.disabled = False
             case _:
                 raise ValueError(f"Unexpected div_team value of {self.div_team}.")
 
-        # Organize container contents
-        self.dynamic_container.clear_items()
-        self.dynamic_selectrow.clear_items()
-        self.dynamic_buttonrow.clear_items()
-        self.dynamic_selectrow.add_item(self.edit_remove_select)
-        match self.div_team:
-            case "divisions":
-                self.dynamic_buttonrow.add_item(self.button_editdivteam)
-                self.dynamic_buttonrow.add_item(self.button_remove)
-            case "teams":
-                self.dynamic_buttonrow.add_item(self.button_editdivteam)
-                self.dynamic_buttonrow.add_item(self.button_remove)
-            case "neither":
-                self.dynamic_buttonrow.add_item(self.button_editneither)
-            case None:
-                self.dynamic_buttonrow.add_item(self.button_editneither)
-            case _:
-                raise ValueError(f"Unexpected div_team value of {self.div_team}.")
+        # # Organize container contents
+        # self.dynamic_container.clear_items()
+        # self.dynamic_selectrow.clear_items()
+        # self.dynamic_buttonrow.clear_items()
+        # self.dynamic_selectrow.add_item(self.edit_remove_select)
+        # match self.div_team:
+        #     case "divisions":
+        #         self.dynamic_buttonrow.add_item(self.button_editdivteam)
+        #         self.dynamic_buttonrow.add_item(self.button_remove)
+        #     case "teams":
+        #         self.dynamic_buttonrow.add_item(self.button_editdivteam)
+        #         self.dynamic_buttonrow.add_item(self.button_remove)
+        #     case "neither":
+        #         self.dynamic_buttonrow.add_item(self.button_editneither)
+        #     case None:
+        #         self.dynamic_buttonrow.add_item(self.button_editneither)
+        #     case _:
+        #         raise ValueError(f"Unexpected div_team value of {self.div_team}.")
 
-        self.dynamic_container.add_item(self.div_team_listing())
-        self.dynamic_container.add_item(self.dynamic_selectrow)
-        self.dynamic_container.add_item(self.dynamic_buttonrow)
+        # self.dynamic_container.add_item(self.div_team_listing())
+        # self.dynamic_container.add_item(self.dynamic_selectrow)
+        # self.dynamic_container.add_item(self.dynamic_buttonrow)
