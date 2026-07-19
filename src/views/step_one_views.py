@@ -1,7 +1,7 @@
 from typing import Literal
-from datetime import datetime, timedelta
 import discord
 from discord import ui
+from src.utils.event_class import Event
 from src.utils.view_utils import (
     set_step_info,
     highlight_step
@@ -74,22 +74,31 @@ class DescriptionModal(ui.Modal):
 #####################################
 
 class StepOneView(ui.LayoutView):
-    def __init__(self):
+    def __init__(self, event: Event):
         super().__init__(timeout=300)
         # Internal variables
         self.step_info: list[str] = set_step_info()
         self.current_step: int = 0
 
         # User choices
-        self.name: str | None = None
-        self.description: str | None = None
+        # self.name: str | None = None
+        # self.description: str | None = None
+        # self.mode: Literal["99", "classic"] = "99"
+        # self.scoring: Literal["points", "placement"] = "points"
+        # self.machine_required: bool = False
+        self.name: str | None = event.event_name
+        self.description: str | None = event.description
         self.mode: Literal["99", "classic"] = "99"
+        if event.mode:
+            self.mode = event.mode
         self.scoring: Literal["points", "placement"] = "points"
-        self.machine_required: bool = False
+        if event.scoring:
+            self.scoring: Literal["points", "placement"] = event.scoring
+        self.machine_required: bool = event.machine_required
 
         # Set layout components
         self.dynamic_title = ui.TextDisplay(
-             content="## New Event",
+             content=f"## Event: {self.name if self.name is not None else ''}",
              id=101)
         section_top_image = ui.Thumbnail(
              "attachment://container1.png"
@@ -120,7 +129,7 @@ class StepOneView(ui.LayoutView):
             ui.TextDisplay("Press button to set event description"),
             accessory=self.description_button(self))
         self.dynamic_description = ui.TextDisplay(
-            f"  **{self.name if self.name is not None else ''} **",
+            f"  **{self.description if self.description is not None else ''} **",
             id=303)
 
         #######################
@@ -130,11 +139,11 @@ class StepOneView(ui.LayoutView):
             discord.SelectOption(label="99", 
                                  description="good ole 99s", 
                                  value="99",
-                                 default=True),
+                                 default=self.mode == "99"),
             discord.SelectOption(label="classic", 
                                  description="for a more refined event", 
                                  value="classic",
-                                 default=False)
+                                 default=self.mode == "classic")
         ]
         mode_row = ui.ActionRow()
         mode_select = self.mode_selection(self, mode_options=mode_options)
@@ -143,11 +152,11 @@ class StepOneView(ui.LayoutView):
             discord.SelectOption(label="points", 
                                  description="for the normies", 
                                  value="points",
-                                 default=True),
+                                 default=self.scoring == "points"),
             discord.SelectOption(label="placement", 
                                  description="for kingmaker-type events", 
                                  value="placement",
-                                 default=False)
+                                 default=self.scoring == "placement")
         ]
         scoring_row = ui.ActionRow()
         scoring_select = self.scoring_selection(self, scoring_options=scoring_options)
@@ -189,6 +198,8 @@ class StepOneView(ui.LayoutView):
 
         self.add_item(container_top)
         self.add_item(container_bottom)
+
+        self.completed()
 
     #################################
     # Button classes

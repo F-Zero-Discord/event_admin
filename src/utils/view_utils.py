@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
-from src.utils.event_class import Division, Team
-    
+
 
 def time_string_to_datetime(time_string: str, fmt='%Y-%m-%d %H:%M') -> datetime | None:
     """Parse a date-time string with the specified format."""
@@ -74,11 +73,3 @@ def highlight_step(step_info: list[dict], current_step: int) -> str:
         checklist_text += f"{step["title"]}\n"
 
     return checklist_text
-
-def group_list(group: list[Division] | list[Team]):
-    string = ""
-    for i, item in enumerate(group):
-        string += f"{item.emote if item.emote is not None else ''} {item.name}"
-        if (i+1) < len(group):
-            string += "\n"
-    return string

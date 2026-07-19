@@ -1,3 +1,4 @@
+from typing import Literal
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -313,25 +314,60 @@ async def get_machines(db):
 # Database calls for event registration
 ###################################################################
 
-async def get_registration_events(db):
+async def get_registration_events(db) -> list[dict] | None:
     """ Gets event information from database.
     """
-    sql_getregevents = ("""SELECT CAST(id AS CHAR) AS id,
-                        SELECT CAST(event_id AS CHAR) AS event_id,
-                        utc_start_dt,
-                        CAST(display_name AS CHAR) AS event_name,
-                        CAST(capacity AS CHAR) AS capacity 
+    sql_getregevents = ("""SELECT id AS scheduled_event_id,
+                            event_id AS event_id,
+                            CAST(display_name AS CHAR) AS event_name,
+                            utc_start_dt AS start_time,
+                            utc_end_dt AS end_time,
+                            CAST(mode AS CHAR) AS mode,
+                            CAST(scoring_method AS CHAR) AS scoring,
+                            CAST(is_machine_input_required AS SIGNED) AS machine_required
                         FROM events_scheduled 
-                        WHERE is_registration_event = 1;"""
+                        WHERE is_registration_event = 1 
+                            AND utc_end_dt > CURRENT_TIMESTAMP;
+                        """
                        )
-    reg_event_dict = await execute_query(db, sql_getregevents)
-    # Turn numbers back into numbers
+    reg_event_dict = await execute_query(db, sql_getregevents, params=None, fetch="all", isProc=False)
+    # print(f"{reg_event_dict=}")
     if reg_event_dict:
-        for event in reg_event_dict:
-            event.id = int(event.id)
-            event.event_id = int(event.event_id)
-            event.capacity = int(event.capacity)
-    return reg_event_dict
+        return reg_event_dict
+    else:
+        return None
+
+
+async def get_event_description(db, event_id: int) -> str | None:
+    """ Gets event information from database.
+    """
+    sql_getevent = """
+                    SELECT description
+                    FROM events
+                    WHERE id = %s
+                    """
+    params = (event_id,)
+    event_desc = await execute_query(db, sql_getevent, params=params, fetch="one", isProc=False)
+    if event_desc:
+        return event_desc["description"]
+    else:
+        return None
+    
+
+async def get_registration_period(db, scheduled_event_id: int) -> dict | None:
+    """
+    """
+    sql_get_regperiod = """
+                    SELECT id AS reg_period_id,
+                            registration_open AS reg_open,
+                            registration_close AS reg_close,
+                            manual_override AS manual_override
+                    FROM registration_period
+                    WHERE scheduled_event_id = %s
+                    """
+    params = (scheduled_event_id,)
+    reginfo = await execute_query(db, sql_get_regperiod, params=params, fetch="one", isProc=False)
+    return reginfo
 
 
 async def get_user_registrations(db, discord_user_id):
@@ -397,10 +433,11 @@ async def get_user_registrations(db, discord_user_id):
     return user_event_dict
 
 
-async def get_event_divisions(db, event_id):
-    sql_geteventdivisions = ("""SELECT CAST(A.id AS CHAR) as id, 
+async def get_event_divisions(db, event_id) -> list[dict] | None:
+    sql_geteventdivisions = ("""SELECT A.id AS id, 
                              CAST(A.name AS CHAR) AS name,
-                             CAST(A.capacity AS CHAR) AS capacity, 
+                             CAST(A.alt_name AS CHAR) AS alt_name,
+                             A.capacity AS capacity, 
                              CAST(A.emote AS CHAR) AS emote
                              FROM divisions A
                              INNER JOIN events_scheduled B
@@ -410,16 +447,16 @@ async def get_event_divisions(db, event_id):
     divisions_dict = await execute_query(db, sql_geteventdivisions, params=(str(event_id),))
     # Recast numbers as numbers
     if divisions_dict:
-        for division in divisions_dict:
-            division.id = int(division.id)
-            division.capacity = int(division.capacity)
-    return divisions_dict
+        return divisions_dict
+    else:
+        return None
 
 
 async def get_event_teams(db, event_id):
-    sql_geteventteams = ("""SELECT CAST(A.id AS CHAR) AS id, 
+    sql_geteventteams = ("""SELECT A.id AS id, 
                          CAST(A.name AS CHAR) AS name,
-                         CAST(A.capacity AS CHAR) AS capacity,
+                         CAST(A.alt_name AS CHAR) AS alt_name,
+                         A.capacity AS capacity,
                          CAST(A.emote AS CHAR) AS emote
                          FROM teams A
                          INNER JOIN events_scheduled B
@@ -429,10 +466,9 @@ async def get_event_teams(db, event_id):
     teams_dict = await execute_query(db, sql_geteventteams, params=(str(event_id),))
     # Recast numbers as numbers
     if teams_dict:
-        for team in teams_dict:
-            team.id = int(team.id)
-            team.capacity = int(team.capacity)
-    return teams_dict
+        return teams_dict
+    else:
+        return None
 
 
 async def add_user_to_division(db, dataentry):
@@ -479,3 +515,192 @@ async def remove_user_from_team(db, db_user_id, event_id):
                             WHERE B.scheduled_event_id = %s AND user_id = %s"""
                             )
     await execute_query(db, sql_remove_from_team, params=(event_id, db_user_id,))
+
+
+async def create_update_event(db,
+                              id: int | None,
+                              name: str,
+                              description: str | None,
+                              duration: int | None,
+                              mode: Literal["99","classic"],
+                              scoring: Literal["points","placement"],
+                              ) -> int | None:
+    """ Adds/Updates entry to/in events table.
+        Non-parameter arguments:
+        - game_id = 1
+    """
+    if id:
+        # Entry exists -- update
+        sql_update_event = """UPDATE events
+                                SET
+                                    name = IFNULL(%s, name),
+                                    description = IFNULL(%s, description),
+                                    hour_duration = IFNULL(%s, hour_duration),
+                                    mode = %s,
+                                    scoring_method = %s
+                                WHERE id = %s
+                            """
+        params = (name, description, duration, mode, scoring, id,)
+        await execute_query(db, sql_update_event, params=params, fetch=None, isProc=False)
+        return id
+    else:
+        # Entry does not exist -- create new
+        sql_new_event = """INSERT INTO events
+                            (game_id, name, description, hour_duration, mode, scoring_method)
+                            VALUES 
+                            (1, %s, %s, %s, %s, %s);
+                            
+                        """
+        params = (name, description, duration, mode, scoring,)
+        await execute_query(db, sql_new_event, params=params, fetch=None, isProc=False)
+        sql_fetch_id = "SELECT LAST_INSERT_ID() AS id"
+        event_id = await execute_query(db, sql_fetch_id, params=None, fetch="one", isProc=False)
+        return event_id["id"]
+
+
+async def create_update_scheduled_event(db, 
+                                        id: int | None,
+                                        event_id: int,
+                                        name: str,
+                                        start_time: datetime,
+                                        end_time: datetime,
+                                        mode: Literal["99","classic"],
+                                        scoring: Literal["points","placement"],
+                                        machine_required: bool
+                                        ):
+    """ Adds/Updates entry to/in events table.
+        Non-parameter arguments:
+        - is_registration_event = 1
+    """
+    match machine_required:
+        case True:
+            machine_required_int = 1
+        case False:
+            machine_required_int = 0
+    if id:
+        # Entry exists -- update
+        sql_update_scheduled_event = """UPDATE events_scheduled
+                                        SET
+                                            event_id = CAST(IFNULL(%s, event_id) AS SIGNED),
+                                            display_name = IFNULL(%s, display_name),
+                                            utc_start_dt = IFNULL(%s, utc_start_dt),
+                                            utc_end_dt = IFNULL(%s, utc_end_dt),
+                                            mode = CAST(%s AS CHAR),
+                                            scoring_method = %s,
+                                            is_registration_event = 1,
+                                            is_machine_input_required = IFNULL(%s, is_machine_input_required)
+                                        WHERE id = %s
+                                    """
+        params = (event_id, name, 
+                  start_time.strftime("%Y-%m-%d %H:%M:%S") if start_time is not None else None, 
+                  end_time.strftime("%Y-%m-%d %H:%M:%S") if end_time is not None else None,
+                  mode, scoring, 
+                  machine_required,
+                  id,)
+        await execute_query(db, sql_update_scheduled_event, params=params, fetch=None, isProc=False)
+        return id
+    else:
+        # Entry does not exist -- create new
+        sql_new_scheduled_event = """INSERT INTO events_scheduled
+                                    (event_id, display_name, utc_start_dt, 
+                                        utc_end_dt, mode, scoring_method,
+                                        is_registration_event, is_machine_input_required
+                                        )
+                                    VALUES 
+                                    (%s, %s, %s, %s, %s, %s, 1, %s);
+                                """
+        params = (int(event_id), name, 
+                  start_time.strftime("%Y-%m-%d %H:%M:%S") if start_time is not None else None, 
+                  end_time.strftime("%Y-%m-%d %H:%M:%S") if end_time is not None else None, 
+                  #"2026-09-01 01:00", "2026-09-01 03:00",
+                  mode, scoring, machine_required_int,
+                  )
+        #
+        await execute_query(db, sql_new_scheduled_event, 
+                            params=params, fetch=None, isProc=False)
+        sql_fetch_id = "SELECT LAST_INSERT_ID() AS id"
+        scheduled_event_id = await execute_query(db, sql_fetch_id, params=None, fetch="one", isProc=False)
+        return scheduled_event_id["id"]
+
+
+async def create_update_divteam(db, 
+                                id: int | None,
+                                scheduled_event_id: int, 
+                                div_team: Literal["divisions","teams"],
+                                name: str,
+                                alt_name: str | None,
+                                emote: str | None,
+                                capacity: int | None,
+                                ):
+    """ Adds/Updates entry to/in either divisions or teams table,
+        depending on input argument div_team.
+    """
+    if id:
+        # Entry exists -- update
+        sql_update_divteam = f"""UPDATE {div_team}
+                                SET
+                                    scheduled_event_id = IFNULL(%s, scheduled_event_id),
+                                    name = IFNULL(%s, name),
+                                    alt_name = IFNULL(%s, alt_name),
+                                    emote = IFNULL(%s, emote),
+                                    capacity = IFNULL(%s, capacity)
+                                WHERE id = %s
+                            """
+        params = (scheduled_event_id, name, alt_name, emote, capacity, id,)
+        await execute_query(db, sql_update_divteam, params=params, fetch=None, isProc=False)
+        return id
+    else:
+        # Entry does not exist -- create new
+        sql_new_divteam = f"""INSERT INTO {div_team}
+                            (scheduled_event_id, name, alt_name, emote, capacity)
+                            VALUES 
+                            (%s, %s, %s, %s, %s)
+                        """
+        params = (scheduled_event_id, name, alt_name, emote, capacity,)
+        await execute_query(db, sql_new_divteam, 
+                            params=params, fetch=None, isProc=False)
+        sql_fetch_id = "SELECT LAST_INSERT_ID() AS id"
+        div_team_id = await execute_query(db, sql_fetch_id, params=None, fetch="one", isProc=False)
+        return div_team_id["id"]
+
+
+async def create_update_registration_period(db,
+                                     id: int | None,
+                                     scheduled_event_id: int,
+                                     reg_open: datetime | None,
+                                     reg_close: datetime | None
+                                     ):
+    """ Enters registration period information into the database.
+    """
+    if id:
+        # Entry exists -- update
+        sql_update_reg_period = """UPDATE registration_period
+                                    SET
+                                        scheduled_event_id = IFNULL(%s, scheduled_event_id),
+                                        registration_open = IFNULL(%s, registration_open),
+                                        registration_close = IFNULL(%s, registration_close)
+                                    WHERE id = %s
+                                """
+        params = (scheduled_event_id, 
+                  reg_open.strftime("%Y-%m-%d %H:%M:%S") if reg_open is not None else None, 
+                  reg_close.strftime("%Y-%m-%d %H:%M:%S") if reg_close is not None else None, 
+                  id,)
+        await execute_query(db, sql_update_reg_period, params=params, fetch=None, isProc=False)
+        return id
+    else:
+        # Entry does not exist -- create new
+        sql_new_reg_period = """INSERT INTO registration_period
+                                (scheduled_event_id, registration_open, registration_close)
+                                VALUES 
+                                (%s, %s, %s);
+                                SELECT LAST_INSERT_ID();
+                            """
+        params = (scheduled_event_id, 
+                  reg_open.strftime("%Y-%m-%d %H:%M:%S") if reg_open is not None else None, 
+                  reg_close.strftime("%Y-%m-%d %H:%M:%S") if reg_close is not None else None
+                  ,)
+        await execute_query(db, sql_new_reg_period, 
+                                       params=params, fetch=None, isProc=False)
+        sql_fetch_id = "SELECT LAST_INSERT_ID() AS id"
+        reg_period_id = await execute_query(db, sql_fetch_id, params=None, fetch="one", isProc=False)
+        return reg_period_id["id"]
