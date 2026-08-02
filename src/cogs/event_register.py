@@ -185,6 +185,7 @@ class EventRegister(commands.Cog):
                 # Check to see if event has only one division/team; if so, go straight to confirmation
                 if selected_event.has_solo_division:
                     withdraw_view = ConfirmWithdrawlView(selected_event, div_team_id)
+                    await interaction.edit_original_response(view=withdraw_view)
                     timed_out = await withdraw_view.wait()
                     
                     # Check why we stopped waiting
