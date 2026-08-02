@@ -44,9 +44,13 @@ async def get_event_information() -> list[Event]:
         event_name_list = [event['event_name'] for event in reg_event_dict_list if 'event_name' in event]
         event_id_list = [event['scheduled_event_id'] for event in reg_event_dict_list if 'scheduled_event_id' in event]
 
-    for event_id in event_id_list:
-        event = await Event.load_event_from_database(scheduled_event_id=event_id)
-        events.append(event)
+    # for event_id in event_id_list:
+    #     event = await Event.load_event_from_database(scheduled_event_id=event_id)
+    #     events.append(event)
+    async with asyncio.TaskGroup() as eg:
+        tasks = [eg.create_task(
+            Event.load_event_from_database(scheduled_event_id=event_id)) for event_id in event_id_list]
+    events = [task.result() for task in tasks]
 
     return events
 
@@ -128,6 +132,8 @@ class EventRegister(commands.Cog):
             await interaction.followup.send("Selection timed out. Please try again.", ephemeral=True)
             return
 
+        if menu_view.output_mode == "cancel":
+            return
         # Grab selected event
         selected_event = [event for event in events if event.scheduled_event_id == menu_view.choice][0]
         # String to identify if the event supports divisions or teams.
@@ -164,8 +170,6 @@ class EventRegister(commands.Cog):
                 # If not Cancel, add to database
                 if confirmation_view.output_mode == "cancel":
                     # Make no changes
-                    cancel_message = CancelView("No registration actions taken.")
-                    await interaction.edit_original_response(view=cancel_message)
                     return
                 else:
                     # Add user to event division/team
@@ -214,8 +218,6 @@ class EventRegister(commands.Cog):
                     match div_team_edit_view.output_mode:
                         case "cancel":
                             # Make no changes
-                            cancel_message = CancelView("No registration actions taken.")
-                            await interaction.edit_original_response(view=cancel_message)
                             return
 
                         case "edit":
@@ -234,8 +236,6 @@ class EventRegister(commands.Cog):
 
                             if confirmation_view.output_mode == "cancel":
                                 # Make no changes
-                                cancel_message = CancelView("No registration actions taken.")
-                                await interaction.edit_original_response(view=cancel_message)
                                 return
                             else:
                                 # Update database to change user's division/team.
@@ -258,8 +258,6 @@ class EventRegister(commands.Cog):
                             
                             if withdraw_view.output_mode == "cancel":
                                 # Make no changes
-                                cancel_message = CancelView("No registration actions taken.")
-                                await interaction.edit_original_response(view=cancel_message)
                                 return
                             else:
                                 # Update database to remove user from division/team.
