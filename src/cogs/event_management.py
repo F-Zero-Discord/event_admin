@@ -39,8 +39,8 @@ class EventMgr(commands.Cog):
 
         # Initialize database variable object
         if event_choice:
-            # load event info
-            event = await Event.load_event_from_database(event_choice)
+            # Load event info
+            event = await Event.load_event_from_database(scheduled_event_name=event_choice)
         else:
             event = Event()
         

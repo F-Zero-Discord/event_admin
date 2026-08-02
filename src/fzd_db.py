@@ -404,18 +404,18 @@ async def get_user_registrations(db, discord_user_id):
         'type': char (enum['division', 'team'])
         'div_team_id': int
     """
-    sql_getuserevents = ("""SELECT CAST(divisions.scheduled_event_id AS CHAR) AS scheduled_event_id,
+    sql_getuserevents = ("""SELECT divisions.scheduled_event_id AS scheduled_event_id,
                             CAST("division" AS CHAR) AS type,
-                            CAST(user_divisions.division_id AS CHAR) AS div_team_id
+                            user_divisions.division_id AS div_team_id
                             FROM user_divisions
                             INNER JOIN divisions
                             ON user_divisions.division_id = divisions.id AND user_divisions.user_id = %s
 
                             UNION
 
-                            SELECT CAST(teams.scheduled_event_id AS CHAR) AS scheduled_event_id,
+                            SELECT teams.scheduled_event_id AS scheduled_event_id,
                                     CAST("team" AS CHAR) AS type,
-                                    CAST(user_teams.team_id AS CHAR) AS div_team_id
+                                    user_teams.team_id AS div_team_id
                             FROM user_teams
                             INNER JOIN teams
                             ON user_teams.team_id = teams.id AND user_teams.user_id = %s
@@ -424,25 +424,29 @@ async def get_user_registrations(db, discord_user_id):
     user_event_dict = await execute_query(
                                         db, 
                                         sql_getuserevents, 
-                                        params=(str(discord_user_id), str(discord_user_id),)
+                                        params=(str(discord_user_id), str(discord_user_id),),
+                                        fetch="all",
+                                        isProc=False
                                         )
     if user_event_dict:
-        for thing in user_event_dict:
-            thing.scheduled_event_id = int(thing.scheduled_event_id)
-            thing.div_team_id = int(thing.div_team_id)
-    return user_event_dict
+        return user_event_dict
+    else:
+        return None
 
 
 async def get_event_divisions(db, event_id) -> list[dict] | None:
     sql_geteventdivisions = ("""SELECT A.id AS id, 
-                             CAST(A.name AS CHAR) AS name,
-                             CAST(A.alt_name AS CHAR) AS alt_name,
-                             A.capacity AS capacity, 
-                             CAST(A.emote AS CHAR) AS emote
-                             FROM divisions A
-                             INNER JOIN events_scheduled B
-                             ON B.id = A.scheduled_event_id
-                             WHERE A.scheduled_event_id = %s"""
+                                CAST(A.name AS CHAR) AS name,
+                                CAST(A.alt_name AS CHAR) AS alt_name,
+                                A.capacity AS capacity, 
+                                (SELECT COUNT(*)
+                                    FROM user_divisions
+                                    WHERE user_divisions.division_id = A.id) AS num_registered,
+                                CAST(A.emote AS CHAR) AS emote
+                                FROM divisions A
+                                INNER JOIN events_scheduled B
+                                    ON B.id = A.scheduled_event_id
+                                WHERE A.scheduled_event_id = %s"""
                              )
     divisions_dict = await execute_query(db, sql_geteventdivisions, params=(str(event_id),))
     # Recast numbers as numbers
@@ -457,6 +461,9 @@ async def get_event_teams(db, event_id):
                          CAST(A.name AS CHAR) AS name,
                          CAST(A.alt_name AS CHAR) AS alt_name,
                          A.capacity AS capacity,
+                         (SELECT COUNT(*)
+                            FROM user_teams
+                            WHERE user_teams.team_id = A.id) AS num_registered,
                          CAST(A.emote AS CHAR) AS emote
                          FROM teams A
                          INNER JOIN events_scheduled B
@@ -489,10 +496,30 @@ async def add_user_to_team(db, dataentry):
     await execute_query(db, sql_newrow, params=dataentry, fetch=None, isProc=True)
 
 
+async def add_user_to_division_sql(db, db_user_id: int, division_id: int):
+    """ Executes sql query command to insert division row to database, using query, 
+        not stored procedure.
+    """
+    sql_newrow = """ INSERT INTO user_divisions (division_id, user_id)
+                        VALUES (%s, %s)
+                """
+    params = (division_id, db_user_id,)
+    await execute_query(db, sql_newrow, params=params, fetch=None, isProc=False)
+
+
+async def add_user_to_team_sql(db, db_user_id: int, team_id: int):
+    """ Executes sql query command to insert team row into database, using query, 
+        not stored procedure.
+    """
+    sql_newrow = """ INSERT INTO user_teams (team_id, user_id)
+                        VALUES (%s, %s)
+                """
+    params = (team_id, db_user_id,)
+    await execute_query(db, sql_newrow, params=params, fetch=None, isProc=False)
+
+
 async def remove_user_from_division(db, db_user_id, event_id):
     """ Executes sql query command to delete data in the user_divisions database table
-        db = database connection object
-        dataentry = [ user_id, event_id ] - all integers
     """
     sql_remove_from_division = ("""DELETE A
                                 FROM user_divisions A
@@ -515,6 +542,28 @@ async def remove_user_from_team(db, db_user_id, event_id):
                             WHERE B.scheduled_event_id = %s AND user_id = %s"""
                             )
     await execute_query(db, sql_remove_from_team, params=(event_id, db_user_id,))
+
+
+async def remove_user_from_division_sql(db, db_user_id: int, division_id: int):
+    """ Executes sql query command to insert division row to database, using query, 
+        not stored procedure.
+    """
+    sql_delete_row = """ DELETE FROM user_divisions
+                        WHERE division_id = %s AND user_id = %s
+                    """
+    params = (division_id, db_user_id,)
+    await execute_query(db, sql_delete_row, params=params, fetch=None, isProc=False)
+
+
+async def remove_user_from_team_sql(db, db_user_id: int, team_id: int):
+    """ Executes sql query command to insert division row to database, using query, 
+        not stored procedure.
+    """
+    sql_delete_row = """ DELETE FROM user_teams
+                        WHERE team_id = %s AND user_id = %s
+                    """
+    params = (team_id, db_user_id,)
+    await execute_query(db, sql_delete_row, params=params, fetch=None, isProc=False)
 
 
 async def create_update_event(db,
@@ -704,3 +753,18 @@ async def create_update_registration_period(db,
         sql_fetch_id = "SELECT LAST_INSERT_ID() AS id"
         reg_period_id = await execute_query(db, sql_fetch_id, params=None, fetch="one", isProc=False)
         return reg_period_id["id"]
+    
+async def get_div_team_number(db, div_team: Literal["division","team"], id: int):
+    """ Get the number of participants assigned to a division/team.
+    """
+    sql_num_div_team = f"""
+                        SELECT COUNT(*)
+                        FROM user_{div_team}s
+                        WHERE user_{div_team}s.{div_team}_id = %s
+                        """
+    params = (id,)
+    count = await execute_query(db, sql_num_div_team, params=params, fetch="one", isProc=False)
+    if not count:
+        return None
+    else:
+        return count

@@ -49,6 +49,7 @@ class AdminBot(commands.Bot):
         try:
             self.db_pool = await init_db_pool()
             await self.load_extension("src.cogs.event_management")
+            await self.load_extension("src.cogs.event_register")
             logger.info("Loaded extensions")
         except Exception as error:
             logger.exception("Failed to load extensions")

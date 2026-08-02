@@ -42,10 +42,10 @@ class StepFiveView(ui.LayoutView):
             ))
 
         # Next Step Container
-        self.next_button = self.next_step_button(self)
+        next_button = self.next_step_button(self)
         next_button_section = ui.Section(
                     ui.TextDisplay(content="When you have made your selections...\n(NOTE: Ignore the intial 'didn't respond in time' error)"),
-                    accessory=self.next_button
+                    accessory=next_button
                 )
         container_bottom = ui.Container()
         container_bottom.add_item(next_button_section)

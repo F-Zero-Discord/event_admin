@@ -1,6 +1,8 @@
 from typing import Literal, Self
 from datetime import datetime, timedelta
+import discord
 from src.utils.view_utils import discord_timestamp
+from src.utils.db_utils import get_or_create_db_user
 from src.fzd_db import (
     get_db_connection,
     get_registration_events,
@@ -8,6 +10,7 @@ from src.fzd_db import (
     get_registration_period,
     get_event_divisions,
     get_event_teams,
+    get_user_registrations,
     create_update_event,
     create_update_scheduled_event,
     create_update_divteam,
@@ -37,6 +40,62 @@ class Event():
             return int(round((self.end_time - self.start_time).total_seconds() / 3600, 0))
         else:
             return None
+
+    # reg_open and reg_close are optional values. if not present, assume event open,
+    #   as users only presented with events that are in the future. 
+    @property
+    def reg_period_not_started(self) -> bool:
+        if not self.reg_open:
+            return False
+        else:
+            return self.reg_open > datetime.now()
+
+    @property
+    def reg_period_open(self) -> bool:
+        if not self.reg_open or not self.reg_close:
+            return True
+        else:
+            return (self.reg_open <= datetime.now()) and (self.reg_close > datetime.now())
+
+    @property
+    def reg_period_closed(self) -> bool:
+        if not self.reg_close:
+            return True
+        else:
+            return self.reg_close < datetime.now()
+
+    @property
+    def at_capacity(self) -> bool:
+        if not self.divisions and not self.teams:
+            raise AttributeError("Event object has no division or team defined.")
+        if self.divisions:
+            capacity_list = []
+            for division in self.divisions:
+                capacity_list.append(division.at_capacity)
+            if all(capacity_list):
+                return True
+            else:
+                return False
+        if self.teams:
+            capacity_list = []
+            for team in self.teams:
+                capacity_list.append(team.at_capacity)
+            if all(capacity_list):
+                return True
+            else:
+                return False
+
+    @property
+    def has_solo_division(self) -> bool:
+        if self.divisions and self.teams:
+            raise ValueError(f"An event can have teams or divisions, but not both.")
+        if not self.divisions:
+            return False
+        elif len(self.divisions) == 1:
+            return True
+        else:
+            return False
+
 
     def __repr__(self) -> str:
         return f"""Event(event_id='{self.event_id}'\n\
@@ -88,7 +147,6 @@ class Event():
             case _:
                 raise ValueError("Unknown format specifier...")
                 
-        
 
     async def send_event_to_database(self):
         """ As method name suggests...
@@ -131,20 +189,33 @@ class Event():
 
 
     @classmethod
-    async def load_event_from_database(self, scheduled_event_name: str) -> Self:
+    async def load_event_from_database(
+        self, scheduled_event_name: str = None, scheduled_event_id: int = None) -> Self:
         """ As method name suggests...
         """
+        # Accept only one input parameter
+        if (scheduled_event_name is None) == (scheduled_event_id is None):
+            raise ValueError(
+                "Method accepts exactly one argument: either 'scheduled_event_name' or 'scheduled_event_id'.")
+        
         # Create object
         self = Event()
+
         # Get scheduled_event (that have not ended) from list of registration events
         async with get_db_connection() as db:
             reg_event_dict_list = await get_registration_events(db)
-        reg_event_dict = next(
-            (item for item in reg_event_dict_list if item["event_name"] == scheduled_event_name), None)
+        
+        # Get event information based on input parameter: either id or name
+        if scheduled_event_id is not None:
+            reg_event_dict = next(
+                (item for item in reg_event_dict_list if item["scheduled_event_id"] == scheduled_event_id), None)
+        else:
+            reg_event_dict = next(
+                (item for item in reg_event_dict_list if item["event_name"] == scheduled_event_name), None)
         
         # Begin populating Event object instance
-        self.event_id: int | None = reg_event_dict["event_id"]
-        self.scheduled_event_id: int | None = reg_event_dict["scheduled_event_id"]
+        self.event_id: int | None = int(reg_event_dict["event_id"])
+        self.scheduled_event_id: int | None = int(reg_event_dict["scheduled_event_id"])
         self.event_name: str | None = reg_event_dict["event_name"]
         self.mode: Literal["99", "classic"] | None = reg_event_dict["mode"]
         self.scoring: Literal["points", "placement"] | None = reg_event_dict["scoring"]
@@ -174,10 +245,11 @@ class Event():
             div_list = []
             for division_dict in division_dict_list:
                 division = Division()
-                division.id = division_dict["id"]
+                division.id = int(division_dict["id"])
                 division.name = division_dict["name"]
                 division.alt_name = division_dict["alt_name"]
                 division.capacity = division_dict["capacity"]
+                division.num_registered = division_dict["num_registered"]
                 division.emote = division_dict["emote"]
                 div_list.append(division)
             self.divisions = div_list
@@ -189,16 +261,31 @@ class Event():
             team_list = []
             for team_dict in team_dict_list:
                 team = Team()
-                team.id = team_dict["id"]
+                team.id = int(team_dict["id"])
                 team.name = team_dict["name"]
                 team.alt_name = team_dict["alt_name"]
                 team.capacity = team_dict["capacity"]
+                team.num_registered = team_dict["num_registered"]
                 team.emote = team_dict["emote"]
                 team_list.append(team)
             self.teams = team_list
         else:
             self.teams = None
         return self
+
+
+    def div_or_team(self) -> str:
+        """ Returns string "division" or "team" depending on the whether the event has 
+            divisions or teams.
+        """
+        if self.divisions:
+            div_team_str = "division"
+        elif self.teams:
+            div_team_str = "team"
+        else:
+            raise ValueError(f"Event must have either divisions or teams, not neither.")
+
+        return div_team_str
 
     
     def check_event(self):
@@ -214,8 +301,25 @@ class Division():
         self.name: str | None = None
         self.alt_name: str | None = None
         self.capacity: int | None = None
+        self.num_registered: int | None = None
         self.emote: str | None = None
 
+
+    @property
+    def at_capacity(self) -> bool:
+        if not self.capacity:
+            return False
+        else:
+            return self.num_registered >= self.capacity
+    
+    # Commented out b/c getting from initial Event db call
+    # @property        
+    # async def num_registered(self) -> int:
+    #     """ Returns number of participants registered in the division
+    #     """
+    #     async with get_db_connection() as db:
+    #         return await get_div_team_number(db, "division", self.id)
+        
 
     def __repr__(self) -> str:
         return f"""Division(id='{self.id}'\n\
@@ -266,9 +370,26 @@ class Team():
         self.name: str | None = None
         self.alt_name: str | None = None
         self.capacity: int | None = None
+        self.num_registered: int | None = None
         self.emote: str | None = None
 
 
+    @property
+    def at_capacity(self) -> bool:
+        if not self.capacity:
+            return False
+        else:
+            return self.num_registered >= self.capacity
+    
+    # Commented out b/c getting from initial Event db call
+    # @property        
+    # async def num_registered(self) -> int:
+    #     """ Returns number of participants registered in the division/team
+    #     """
+    #     async with get_db_connection() as db:
+    #         return await get_div_team_number(db, "team", self.id)
+        
+    
     def __repr__(self) -> str:
         return f"""Team(id='{self.id}'\n\
                 scheduled_event_id='{self.scheduled_event_id}'\n\
@@ -318,6 +439,73 @@ def group_list(group: list[Division] | list[Team]):
             if (i+1) < len(group):
                 string += "\n"
         return string
+
+
+class UserRegistrations():
+    def __init__(self, interaction: discord.Interaction):
+        self.discord_user_id: str = interaction.user.name
+        self.db_id: int | None = None
+        self.registrations: list[dict] | None = None
+        """ self.registrations dictionary format:
+                {scheduled_event_id: int,
+                type: Literal["division", "team],
+                div_team_id: int}
+            Note that waitlist status in div_team_id not currently implemented
+        """
+
+    def __format__(self, format_spec: str) -> Literal["detail"] | None:
+            """Provides a detailed description of an event."""
+            match format_spec:
+                case "detail":
+                    if not self:
+                        return None
+                    else:
+                        out_string = "UserRegistrations(\n"
+                        out_string += f"\tdiscord_user_id: {self.discord_user_id}\n"
+                        out_string += f"\tdb_id: {self.db_id}\n"
+                        out_string += "\tregistrations:\n"
+                        if not self.registrations:
+                            out_string += "\t\tNone\n"
+                        else:
+                            for i, registration in enumerate(self.registrations):
+                                out_string += f"\t\tRegistration {i}\n"
+                                out_string += f"\t\t\tscheduled_event_id: {registration['scheduled_event_id']}\n"
+                                out_string += f"\t\t\ttype: {registration['type']}\n"
+                                out_string += f"\t\t\tdiv_team_id: {registration['div_team_id']}\n"
+                        return out_string
+    
+
+    def is_registered(self, scheduled_event_id):
+        if self.registrations:
+            if any(r.get("scheduled_event_id") == scheduled_event_id for r in self.registrations):
+                return True
+            else:
+                return False
+        else:
+            return False
+        
+
+    async def get_user_info(self, interaction: discord.Interaction):
+        if not self.discord_user_id:
+            self.discord_user_id = interaction.user.name
+        async with get_db_connection() as db:
+            self.db_id = await get_or_create_db_user(db, interaction.user)
+            self.registrations = await get_user_registrations(db, self.db_id)
+
+
+# class EventSetRegs():
+#     def __init__(self):
+#         event_capacity_status_list: list[EventRegs] = []
+
+
+#     class EventRegs():
+#         def __init__(self):
+#             self.scheduled_event_id: int | None = None
+#             self.type: Literal["division", "team"] | None
+#             self.sub_id: int | None = None
+#             self.capacity: int | None = None
+#             self.num_registered: int| None = None
+
 
 
 # Dummy event for testing
