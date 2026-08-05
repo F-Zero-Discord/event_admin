@@ -1,4 +1,12 @@
 from datetime import datetime, timezone
+from enum import StrEnum
+
+class NextStep(StrEnum):
+    LEAVE = "leave"
+    MENU = "menu"
+    EDIT = "edit"
+    CONFIRM = "confirm"
+    WITHDRAW_CONF = "withdraw_conf"
 
 
 def time_string_to_datetime(time_string: str, fmt='%Y-%m-%d %H:%M') -> datetime | None:

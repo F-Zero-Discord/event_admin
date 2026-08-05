@@ -119,7 +119,9 @@ class LoadView(ui.LayoutView):
 
 For events with divisions or teams, we will endeavor to place you in your requested division or team, but we may need to make changes to account for capacity and balance.
 
-Please press continue below to start!"""
+In addition to server RULES, Event RULES are designed to foster a fun and competitive environment for all participants. Each event has its own set of rules and instructions. If you have a question, please ask. We only ask that you agree to read and follow the rules for the events you register for. 
+
+Please confirm that you will read and follow the rules for each event you register for."""
 
         container = ui.Container()
         container.add_item(ui.TextDisplay(content="# Register for an Event"))

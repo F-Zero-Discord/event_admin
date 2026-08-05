@@ -189,6 +189,69 @@ class Event():
                     await team.send_team_to_database(self.scheduled_event_id)
 
 
+    @staticmethod
+    async def _get_event_description(event_id):
+        """ Get description from events table
+        """
+        async with get_db_connection() as db:
+            return await get_event_description(db, event_id)
+
+
+    @staticmethod
+    async def _get_registration_period(scheduled_event_id):
+        """ Get information about the registration period
+        """
+        async with get_db_connection() as db:
+            reg_period = await get_registration_period(db, scheduled_event_id)
+            return reg_period["reg_period_id"], reg_period["reg_open"], reg_period["reg_close"]
+
+
+    @staticmethod
+    async def _get_event_divisions(scheduled_event_id):
+        """ Get division information
+        """
+        async with get_db_connection() as db:
+            division_dict_list = await get_event_divisions(db, scheduled_event_id)
+        if division_dict_list:
+            div_list = []
+            for division_dict in division_dict_list:
+                division = Division()
+                division.id = int(division_dict["id"])
+                division.name = division_dict["name"]
+                division.alt_name = division_dict["alt_name"]
+                division.capacity = division_dict["capacity"]
+                division.num_registered = division_dict["num_registered"]
+                division.emote = division_dict["emote"]
+                div_list.append(division)
+            divisions = div_list
+        else:
+            divisions = None
+        return divisions
+
+
+    @staticmethod
+    async def _get_event_teams(scheduled_event_id):
+        """ Get teams information
+        """
+        async with get_db_connection() as db:
+            team_dict_list = await get_event_teams(db, scheduled_event_id)
+        if team_dict_list:
+            team_list = []
+            for team_dict in team_dict_list:
+                team = Team()
+                team.id = int(team_dict["id"])
+                team.name = team_dict["name"]
+                team.alt_name = team_dict["alt_name"]
+                team.capacity = team_dict["capacity"]
+                team.num_registered = team_dict["num_registered"]
+                team.emote = team_dict["emote"]
+                team_list.append(team)
+            teams = team_list
+        else:
+            teams = None
+        return teams
+
+
     @classmethod
     async def load_event_from_database(
         self, scheduled_event_name: str = None, scheduled_event_id: int = None) -> Self:
@@ -227,51 +290,62 @@ class Event():
         self.start_time: datetime | None = reg_event_dict["start_time"]
         self.end_time: datetime | None = reg_event_dict["end_time"]
 
-        # Get description from events table
-        async with get_db_connection() as db:
-            self.description: str | None = await get_event_description(db, self.event_id)
+        async with asyncio.TaskGroup() as evg:
+            task_desc = evg.create_task(Event._get_event_description(self.event_id))
+            task_sched = evg.create_task(Event._get_registration_period(self.scheduled_event_id))
+            task_div = evg.create_task(Event._get_event_divisions(self.scheduled_event_id))
+            task_team = evg.create_task(Event._get_event_teams(self.scheduled_event_id))
 
-        # Get registration info
-        async with get_db_connection() as db:
-            reg_period = await get_registration_period(db, self.scheduled_event_id)
-        if reg_period:
-            self.reg_period_id: int | None = reg_period["reg_period_id"]
-            self.reg_open: datetime | None = reg_period["reg_open"]
-            self.reg_close: datetime | None = reg_period["reg_close"]
+        self.description = task_desc.result()
+        self.reg_period_id, self.reg_open, self.reg_close = task_sched.result()
+        self.divisions = task_div.result()
+        self.teams = task_team.result()
 
-        # Get Division and Team info
-        async with get_db_connection() as db:
-            division_dict_list = await get_event_divisions(db, self.scheduled_event_id)
-        if division_dict_list:
-            div_list = []
-            for division_dict in division_dict_list:
-                division = Division()
-                division.id = int(division_dict["id"])
-                division.name = division_dict["name"]
-                division.alt_name = division_dict["alt_name"]
-                division.capacity = division_dict["capacity"]
-                division.num_registered = division_dict["num_registered"]
-                division.emote = division_dict["emote"]
-                div_list.append(division)
-            self.divisions = div_list
-        else:
-            self.teams = None
-        async with get_db_connection() as db:
-            team_dict_list = await get_event_teams(db, self.scheduled_event_id)
-        if team_dict_list:
-            team_list = []
-            for team_dict in team_dict_list:
-                team = Team()
-                team.id = int(team_dict["id"])
-                team.name = team_dict["name"]
-                team.alt_name = team_dict["alt_name"]
-                team.capacity = team_dict["capacity"]
-                team.num_registered = team_dict["num_registered"]
-                team.emote = team_dict["emote"]
-                team_list.append(team)
-            self.teams = team_list
-        else:
-            self.teams = None
+        # # Get description from events table
+        # async with get_db_connection() as db:
+        #     self.description: str | None = await get_event_description(db, self.event_id)
+
+        # # Get registration info
+        # async with get_db_connection() as db:
+        #     reg_period = await get_registration_period(db, self.scheduled_event_id)
+        # if reg_period:
+        #     self.reg_period_id: int | None = reg_period["reg_period_id"]
+        #     self.reg_open: datetime | None = reg_period["reg_open"]
+        #     self.reg_close: datetime | None = reg_period["reg_close"]
+
+        # # Get Division and Team info
+        # async with get_db_connection() as db:
+        #     division_dict_list = await get_event_divisions(db, self.scheduled_event_id)
+        # if division_dict_list:
+        #     div_list = []
+        #     for division_dict in division_dict_list:
+        #         division = Division()
+        #         division.id = int(division_dict["id"])
+        #         division.name = division_dict["name"]
+        #         division.alt_name = division_dict["alt_name"]
+        #         division.capacity = division_dict["capacity"]
+        #         division.num_registered = division_dict["num_registered"]
+        #         division.emote = division_dict["emote"]
+        #         div_list.append(division)
+        #     self.divisions = div_list
+        # else:
+        #     self.divisions = None
+        # async with get_db_connection() as db:
+        #     team_dict_list = await get_event_teams(db, self.scheduled_event_id)
+        # if team_dict_list:
+        #     team_list = []
+        #     for team_dict in team_dict_list:
+        #         team = Team()
+        #         team.id = int(team_dict["id"])
+        #         team.name = team_dict["name"]
+        #         team.alt_name = team_dict["alt_name"]
+        #         team.capacity = team_dict["capacity"]
+        #         team.num_registered = team_dict["num_registered"]
+        #         team.emote = team_dict["emote"]
+        #         team_list.append(team)
+        #     self.teams = team_list
+        # else:
+        #     self.teams = None
         return self
 
 
